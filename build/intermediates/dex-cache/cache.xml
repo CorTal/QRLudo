@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<items version="2" >
+
+    <item
+        is-multidex="true"
+        jar="/home/etudiant/AndroidStudioProjects/QRCodeForGames/app/build/intermediates/incremental-runtime-classes/debug/instant-run.jar"
+        jumboMode="true"
+        optimize="true"
+        revision="25.0.2"
+        sha1="caff8e51a24901cfc9cd7e1cf83d84f4cb0c103b">
+        <dex dex="/home/etudiant/AndroidStudioProjects/QRCodeForGames/app/build/intermediates/transforms/dex/debug/folders/1000/10000/instant-run_def5f1aa8a3890df7d15c2bc3d34e69bc77a4ae2/classes.dex" />
+    </item>
+    <item
+        is-multidex="true"
+        jar="/home/etudiant/AndroidStudioProjects/QRCodeForGames/app/build/intermediates/incremental-classes/debug/instant-run-bootstrap.jar"
+        jumboMode="true"
+        optimize="true"
+        revision="25.0.2"
+        sha1="9bab2a891b2a5c996d01ba051cd387d907a0d0b5">
+        <dex dex="/home/etudiant/AndroidStudioProjects/QRCodeForGames/app/build/intermediates/transforms/dex/debug/folders/1000/10000/instant-run-bootstrap_c53a451a6dda3ed0d5212f81b0d9bd9744205e02/classes.dex" />
+    </item>
+
+</items>

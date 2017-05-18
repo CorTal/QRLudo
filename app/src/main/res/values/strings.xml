@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">QRCodeForGames</string>
+    <string name="title_activity_web">WebActivity</string>
+    <string name="card_picture">Card Picture</string>
+    <string name="action_settings">Options</string>
+    <string-array name="languages_array">
+        <item>fr</item>
+        <item>en</item>
+        <item>es</item>
+        <item>de</item>
+    </string-array>
+    <string-array name="display_lang_array">
+        <item>Français</item>
+        <item>Anglais</item>
+        <item>Espagnol</item>
+        <item>Allemand</item>
+    </string-array>
+</resources>
