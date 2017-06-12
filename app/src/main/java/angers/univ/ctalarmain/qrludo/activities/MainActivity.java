@@ -2,24 +2,31 @@ package angers.univ.ctalarmain.qrludo.activities;
 
 import android.Manifest;
 import android.annotation.TargetApi;
+import android.app.Dialog;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.media.AudioManager;
-import android.media.MediaPlayer;
 import android.media.ToneGenerator;
-import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Vibrator;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.util.Log;
 import android.util.SparseArray;
+import android.util.SparseIntArray;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.SurfaceHolder;
@@ -27,10 +34,13 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
 import com.google.android.gms.vision.CameraSource;
 import com.google.android.gms.vision.Detector;
 import com.google.android.gms.vision.barcode.Barcode;
@@ -40,77 +50,389 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
-import java.io.IOException;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Locale;
 
 import angers.univ.ctalarmain.qrludo.R;
 import angers.univ.ctalarmain.qrludo.utils.BasicImageDownloader;
 import angers.univ.ctalarmain.qrludo.utils.OnSwipeTouchListener;
+import angers.univ.ctalarmain.qrludo.utils.QDCResponse;
+import angers.univ.ctalarmain.qrludo.utils.QuestionDelayCounter;
 
 import static java.lang.String.valueOf;
 
-public class MainActivity extends AppCompatActivity {
+/**
+ * @author Corentin Talarmain
+ * MainActivity is the main activity of the application, this is where the user will be able to detect QRCodes and hear the question / answer.
+ */
+public class MainActivity extends AppCompatActivity implements SensorEventListener, QDCResponse {
+    /**
+     * The name of the file containing the user's settings.
+     */
     public static final String PREFS_NAME = "MyPrefsFile";
 
+    /**
+     * The default language that will be applied to the Text To Speech engine.
+     */
     public static final Locale LOCALE_DEFAULT = Locale.FRANCE;
-    public static final float SPEEDSPEECH_DEFAULT = (float)1.2;
-    private final int RES_PLACEHOLDER = R.drawable.placeholder_grey;
-    private final int RES_ERROR = R.drawable.error_orange;
-    static final int OPTION_REQUEST = 80;  // The request code
-    private static final int CAMERA_REQUEST = 10;
-    private static final int INTERNET_REQUEST = 20;
-    private final int START_STATE = 30;
-    private final int DETECTING_STATE = 40;
-    private final int NO_QUESTION_PRINTED_STATE = 50;
-    private final int QUESTION_PRINTED_STATE = 60;
-    private final int REPONSE_PRINTED_STATE = 70;
-    private final int MY_DATA_CHECK_CODE = 0;
-    private int cameraState;
-    private int questionState;
-    private float speechSpeed;
-    private Locale ttslanguage;
-    private LinearLayout mainLayout;
-    private RelativeLayout imageLayout;
-    private LinearLayout contentLayout;
-    private TextView text_space;
-    private ImageView image_space;
-    private SurfaceView cameraView;
-    private BarcodeDetector detector;
-    private CameraSource cameraSource;
-    private TextToSpeech ttobj;
-    private boolean marshmallow;
-    private boolean camera;
-    private boolean internet;
-    private Detector.Processor<Barcode> detector_processor;
-    private boolean lollipop;
-    ToneGenerator toneGen;
-    private Toolbar toolbar;
 
+    /**
+     * The default speed applied to the Text To Speech Engine.
+     */
+    public static final float SPEEDSPEECH_DEFAULT = (float)1.2;
+
+    /**
+     * The default mode applied to the Text To Speech engine.
+     */
+    public static final int DEFAULT_MODE = TextToSpeech.QUEUE_ADD;
+
+    /**
+     * The default delay for question to get resetted.
+     */
+    public static final int DEFAULT_QUESTION_RESET_TIME = 60;
+
+    /**
+     * The integer corresponding to the request for phone vibration authorization
+     */
+    private static final int VIBRATE_REQUEST = 80;
+
+    /**
+     * The integer corresping to the code identifying the option intent used to launch the option activity.
+     * @see OptionActivity
+     */
+    static final int OPTION_REQUEST = 90;  // The request code
+
+    /**
+     * The integer corresponding to the request for the camera authorization.
+     */
+    private static final int CAMERA_REQUEST = 10;
+
+    /**
+     * The integer corresponding to the request for the internet access authorization
+     */
+    private static final int INTERNET_REQUEST = 20;
+
+    private static final int MULTIPLE_QUESTIONS_DETECTED = 100;
+
+    public static final int DEFAULT_MULTIPLE_DETECTION_TIME = 4;
+
+
+    /*
+     * -----------------------------------------CAMERA STATES -----------------------------------------
+     */
+
+    /**
+     *  The integer corresponding to the start state of the application.
+     *  This state is corresponding to the camera being inactive.
+     */
+    private final int START_STATE = 30;
+
+    /**
+     * The integer corresponding to the detecting state of the application
+     * This state is corresponing to the camera being active.
+     */
+    private final int DETECTING_STATE = 40;
+
+    /*
+     * -----------------------------------------QUESTION STATES -----------------------------------------
+     */
+
+    /**
+     * The integer corresponding to the no question printed state of the application
+     * This state corresponds to the state where no question is printed.
+     */
+    private final int NO_QUESTION_PRINTED_STATE = 50;
+
+    /**
+     * The integer corresponding to the question printed state of the application
+     * This state corresponds to the state where a question is printed
+     */
+    private final int QUESTION_PRINTED_STATE = 60;
+
+
+    /**
+     * The integer corresponding to the reponse printed state of the application
+     * This state is planned for a futur use of QRCodes
+     */
+    private final int REPONSE_PRINTED_STATE = 70;
+
+    /**
+     * The integer corresponding to the current camera state
+     */
+    private int cameraState;
+
+    /**
+     * The integer corresponding to the current question state
+     */
+    private int questionState;
+
+    /**
+     * The integer corresponding to the speed of the text to speech engine
+     */
+    private float speechSpeed;
+
+    /**
+     * The current language of the text to speech engine.
+     */
+    private Locale ttslanguage;
+
+    /**
+     * The current mode of the text to speech engine.
+     */
+    private int speechMode;
+
+    /**
+     * The current delay between reset of the questions
+     */
+
+    private int question_reset_time;
+
+    /*
+    *--------------------------------------Layouts--------------------------------------
+     */
+
+    /**
+     * The main layout where all happens
+     */
+    private RelativeLayout mainLayout;
+
+    /**
+     * The layout used to display a picture
+     * Not used at the moment, for a later purpose
+     */
+    private RelativeLayout imageLayout;
+
+    /**
+     * The layout used to display the question / answer
+     */
+    private LinearLayout contentLayout;
+
+    /**
+     * The text view containing the current question / answer
+     */
+    private TextView text_space;
+
+    /**
+     * The image view containing the current picture to show
+     */
+    private ImageView image_space;
+
+    /**
+     * The view containing the camera preview and detector
+     */
+    private SurfaceView cameraView;
+
+    /**
+     * The barcode detector
+     */
+    private BarcodeDetector detector;
+
+    /**
+     * The object used to get the camera
+     */
+    private CameraSource cameraSource;
+
+    /**
+     * The text to speech engine object
+     */
+    private TextToSpeech ttobj;
+
+    /**
+     * The progress bar for the text to speech loading.
+     */
+    private ProgressBar ttsprogress;
+
+    /**
+     * The text view indicating the text to speech loading
+     */
+    private TextView text_progress;
+
+    /**
+     * The boolean indicating that the sdk version of the phone is greater than marshamallow (API 23)
+     */
+    private boolean marshmallow;
+
+    /**
+     * The boolean indicating if the camera permission has been granted
+     */
+    private boolean camera;
+
+    /**
+     * The boolean indicating if the internet permission has been granted
+     */
+    private boolean internet;
+
+    /**
+     * The processor of the detector, where the events from the detector are handled
+     */
+    private Detector.Processor<Barcode> detector_processor;
+
+    /**
+     * The boolean indicating if the sdk version of the phone is greater than lollipop
+     */
+    private boolean lollipop;
+
+    /**
+     * The boolean indicating if the sdk version of the phone is greater than ice cream
+     */
+    private boolean ice_cream;
+
+    /**
+     * The boolean indicating if the text to speech engine is done initializing
+     */
+    private boolean ttsready;
+
+    private boolean multiple_detecting;
+
+    /**
+     * This object is used to make the "bip" sound when a QRCode is detected
+     */
+    ToneGenerator toneGen;
+
+    /**
+     * This bundle is used to pass a list of languages available for the text to speech engine
+     */
+    private Bundle locals;
+
+    /**
+     * This string store the last code scanned, so the detected won't scan it again over and over
+     */
+    String lastBarcode;
+
+    /**
+     * The current question scanned
+     */
     private String question;
+
+    /**
+     * The current answer scanned
+     */
     private String reponse;
 
-    private File questionFile;
+    private ArrayList<String> m_barcodes;
 
-    //private String image_url;
+    private int m_nbrCodes;
 
-    //private boolean image;
+    private int currQuest;
+
+    /**
+     * The asynchronous task used to countdown the time before the last question has to get resetted
+     */
+    private QuestionDelayCounter qdc;
+
+    /**
+     * The image url, for a later purpose with the presence of pictures
+     */
+    private String image_url;
+
+    /**
+     * The boolean indicating the presence of a picture in the code, for a later purpose
+     */
+    private boolean image;
+
+    /**
+     * The boolean indicating the presence of a sound in the code, for a later purpose
+     */
     private boolean musique;
 
 
-    private MediaPlayer mpintro;
+    /**
+     * This object is used to manage the different sensors used
+     */
+    private SensorManager sensorManager;
 
-    private boolean mpPaused;
-    private int mpPosition;
+    /**
+     * The accelerometer sensor, used to manage the movements of the phone
+     */
+    private Sensor accelerometer;
+
+    /**
+     * The proximity sensor, used to manage the proximity of the phone from another object
+     */
+    private Sensor proximity;
+
+    /**
+     * The electro magnetic sensor, used to manage the electro magnetic field of the phone
+     */
+    private Sensor magnetic;
+
+    private boolean hasAccelerometer;
+
+    private boolean hasProximity;
+
+    private boolean hasMagnetic;
 
 
+    /**
+     * The vector used to gather datas from the accelerometer sensor
+     */
+    private float[] acceleromterVector = new float[3];
+
+    /**
+     * The vector used to gather data from the magnetic sensor
+     */
+    private float[] magneticVector = new float[3];
+
+
+    private float[] mResultMatric = new float[9];
+    private float[] resultMatrix = new float[9];
+
+
+    MultipleDetectionTimer mdt;
+
+    /**
+     * Float used for the proximity sensor
+     */
+    float p;
+
+    /**
+     * long used to know when the last sensor event occurred
+     */
+    private long lastUpdate = 0;
+
+    private int lastInclination = -1;
+
+    private int inclinationCounter = 0;
+    /**
+     * The boolean used to indicate if the phone vibrating permission has been granted
+     */
+    private boolean vibrate;
+
+    /**
+     * The object used to make the phone vibrate
+     */
+    private Vibrator vibrator;
+
+    GoogleApiAvailability gga;
+
+    private final int GOOGLE_SERVICES_REQUEST = 500;
+
+    private int multiple_detection_time;
+
+
+    /**
+     * The OnCreate event of the main activity, called at the creation.
+     * Initializes all the attributes and check for a bundle to restore a defined state.
+     * Initializes also the listeners and check for the permissions.
+     * @param savedInstanceState The bundle saving data if a state has to be saved
+     */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        gga = GoogleApiAvailability.getInstance();
+        int status = gga.isGooglePlayServicesAvailable(getApplicationContext());
+        if(status == ConnectionResult.SUCCESS) {
+            //alarm to go and install Google Play Services
+        }else{
+
+            Dialog errorDia = gga.getErrorDialog(this,status,GOOGLE_SERVICES_REQUEST);
+            errorDia.show();
+        }
         initializeAttributes();
-        /**/
+
         if(savedInstanceState != null) {
             if (savedInstanceState.containsKey("QUESTION"))
                 question = savedInstanceState.getString("QUESTION");
@@ -128,26 +450,83 @@ public class MainActivity extends AppCompatActivity {
 
         initializeListeners();
 
-        if(marshmallow)
-            checkPermissions();
+
+        checkPermissions();
 
 
     }
 
+    /**
+     * Method defined from the QDCResponse interface.
+     * Called when the QuestionDelayCounter AsyncTask is over
+     * @see QuestionDelayCounter
+     * @see QDCResponse
+     * @param output The output of the Async Task, true if the question has to be reset, false otherwise
+     */
+    @Override
+    public void processFinish(Boolean output) {
+        if(output){
+           resetQuestion();
+            lastBarcode = "";
+        }
+    }
+
+    /**
+     * The AsyncTask used to detect when the Text To Speech engine talk for the first time
+     */
+    private class detectionOnTTSInitialization extends AsyncTask<TextToSpeech,Void,Integer>{
+
+        /**
+         * Get out of a while waiting for the text to speech to speak, and then initiate the application
+         * detector
+         * @param params The Text To Speech engine on 0
+         * @return An integer meaning it's ok
+         */
+        @Override
+        protected Integer doInBackground(TextToSpeech... params) {
+            while(!params[0].isSpeaking()){
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    ttsprogress.setVisibility(View.GONE);
+                    text_progress.setVisibility(View.GONE);
+                }
+            });
+            ttsready = true;
+            return 1;
+        }
+    }
+
+    /**
+     * The method setting up the text to speech engine.
+     */
     private void SetUpTTS() {
         /*Intent checkIntent = new Intent();
         checkIntent.setAction(TextToSpeech.Engine.ACTION_CHECK_TTS_DATA);
         startActivityForResult(checkIntent, MY_DATA_CHECK_CODE);*/
+
+        //The text to speech
         ttobj = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
             @Override
             public void onInit(int status) {
+
                 ttobj.setLanguage(ttslanguage);
                 ttobj.setSpeechRate(speechSpeed);
-                toSpeech("Application lancée, appuyez longuement pour lancer la détection.", TextToSpeech.QUEUE_FLUSH);
+                new detectionOnTTSInitialization().execute(ttobj);
+                toSpeech("Application lancée.", TextToSpeech.QUEUE_FLUSH);
+                fillLocals();
+
             }
         });
 
 
+        //This OnUtteranceProgressListener is used for the synthetize
         ttobj.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override
             public void onStart(String utteranceId) {
@@ -171,33 +550,70 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void fillLocals() {
 
+        Locale[] locales = Locale.getAvailableLocales();
+
+
+            for (Locale l : locales) {
+                try {
+                    if (ttobj.isLanguageAvailable(l) >= TextToSpeech.LANG_COUNTRY_AVAILABLE) {
+                        locals.putString(l.getCountry(), l.getLanguage());
+                    }
+                }
+                catch(IllegalArgumentException e){
+                }
+            }
+
+    }
+
+
+    /**
+     * OnPause event for the activity, unregister the sensors
+     */
+    @Override
+    protected void onPause() {
+        // unregister the sensor (désenregistrer le capteur)
+        if(hasAccelerometer)
+        sensorManager.unregisterListener(this, accelerometer);
+        if(hasProximity)
+        sensorManager.unregisterListener(this, proximity);
+        super.onPause();
+    }
+
+    /**
+     * The OnResume event for the activity
+     * Register the sensors
+     */
+    @Override
+    protected void onResume() {
+        /* Ce qu'en dit Google&#160;dans le cas de l'accéléromètre :
+         * «&#160; Ce n'est pas nécessaire d'avoir les évènements des capteurs à un rythme trop rapide.
+         * En utilisant un rythme moins rapide (SENSOR_DELAY_UI), nous obtenons un filtre
+         * automatique de bas-niveau qui "extrait" la gravité  de l'accélération.
+         * Un autre bénéfice étant que l'on utilise moins d'énergie et de CPU.&#160;»
+         */
+        if(hasAccelerometer)
+        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
+        if(hasProximity)
+        sensorManager.registerListener(this, proximity,SensorManager.SENSOR_DELAY_UI);
+        super.onResume();
+    }
+
+    /**
+     * Initialization of the attributes.
+     */
     private void initializeAttributes() {
 
+        /*
+        * --------------- LAYOUTS ---------------
+         */
 
-        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
+        ttsprogress = (ProgressBar) findViewById(R.id.tts_progress);
 
-        speechSpeed = settings.getFloat("speedSpeech", SPEEDSPEECH_DEFAULT);
+        text_progress = (TextView) findViewById(R.id.text_loading);
 
-        ttslanguage = new Locale(settings.getString("language", LOCALE_DEFAULT.getLanguage()));
-
-        SetUpTTS();
-
-        questionFile = new File(getCacheDir(),"question.wav");
-
-        try {
-            boolean ar = questionFile.createNewFile();
-            Log.d("CREATION",valueOf(ar));
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        mpPaused = false;
-
-        mpPosition = 0;
-
-        //Main Layout
-        mainLayout = (LinearLayout) findViewById(R.id.main_layout);
+        mainLayout = (RelativeLayout) findViewById(R.id.main_layout);
 
         //Image layout
         imageLayout = (RelativeLayout) findViewById(R.id.image_layout);
@@ -213,21 +629,68 @@ public class MainActivity extends AppCompatActivity {
 
         cameraView.setVisibility(View.INVISIBLE);
 
+        ttsready = false;
+
+        locals = new Bundle();
+
+        vibrator = (Vibrator) getApplicationContext().getSystemService(Context.VIBRATOR_SERVICE);
+
+        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
+
+        speechSpeed = settings.getFloat("speechSpeed", SPEEDSPEECH_DEFAULT);
+
+        ttslanguage = new Locale(settings.getString("speechLanguage", LOCALE_DEFAULT.getLanguage()),settings.getString("speechCountry", LOCALE_DEFAULT.getCountry()));
+
+        speechMode = settings.getInt("speechMode", DEFAULT_MODE);
+
+        question_reset_time = settings.getInt("resetTime",DEFAULT_QUESTION_RESET_TIME);
+
+        multiple_detection_time = settings.getInt("MDTime",DEFAULT_MULTIPLE_DETECTION_TIME);
+
+        SetUpTTS();
+
+        PackageManager manager = getPackageManager();
+
+        hasAccelerometer = manager.hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER);
+
+
+        hasProximity = manager.hasSystemFeature(PackageManager.FEATURE_SENSOR_PROXIMITY);
+
+        // Instancier le gestionnaire des capteurs, le SensorManager
+        sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+        // Instancier l'accéléromètre
+        if(hasAccelerometer)
+         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+
+        if(hasProximity)
+         proximity = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+
+        magnetic = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+
+
+        m_barcodes = new ArrayList<>();
+
+        lastUpdate = System.currentTimeMillis();
+        //Main Layout
+
+
         toneGen = new ToneGenerator(AudioManager.STREAM_MUSIC, 100);
 
-        AudioManager am = (AudioManager)getSystemService(getBaseContext().AUDIO_SERVICE);
-
-        am.setMode(AudioManager.MODE_NORMAL);
-
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
         cameraState = START_STATE;
 
         questionState = NO_QUESTION_PRINTED_STATE;
 
 
+        lastBarcode = "";
 
         marshmallow = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M;
 
         lollipop = android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP ;
+
+        ice_cream = android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1;
+
+        multiple_detecting = false;
 
         internet = false;
 
@@ -253,6 +716,7 @@ public class MainActivity extends AppCompatActivity {
                 .build();
 
 
+
         cameraView.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
@@ -260,7 +724,7 @@ public class MainActivity extends AppCompatActivity {
 
                     cameraSource.start(cameraView.getHolder());
                     cameraState = DETECTING_STATE;
-                    toSpeech("Détection en cours.",TextToSpeech.QUEUE_FLUSH);
+
                     Log.d("CAMERA_START", "Camera started");
                 } catch(SecurityException se)
                 {
@@ -281,7 +745,7 @@ public class MainActivity extends AppCompatActivity {
                 try {
 
                     if(cameraState == DETECTING_STATE) {
-                        toSpeech("Détection interrompue.",TextToSpeech.QUEUE_ADD);
+
                         cameraState = START_STATE;
                     }
                     cameraSource.stop();
@@ -293,10 +757,9 @@ public class MainActivity extends AppCompatActivity {
         });
 
 
-
         detector_processor = new Detector.Processor<Barcode>() {
-            String lastBarcode;
             int lastBarcodesSize;
+
             @Override
             public void release() {
             }
@@ -305,40 +768,29 @@ public class MainActivity extends AppCompatActivity {
             public void receiveDetections(Detector.Detections<Barcode> detections) {
                 final SparseArray<Barcode> barcodes = detections.getDetectedItems();
                 if (barcodes.size() != 0) {
-                    Log.d("BARCODE", valueOf(barcodes.size()));
-                    if(barcodes.size() == 1)
-                    {
-                        if(!barcodes.valueAt(0).rawValue.equals(lastBarcode))
-                        {
-                            resetQuestion();
-                            toneGen.startTone(ToneGenerator.TONE_CDMA_PIP,150);
-                            lastBarcode = barcodes.valueAt(0).rawValue;
-                            parseJSON(lastBarcode);
-                        }
-                    }else
-                    {
-                        if(lastBarcodesSize != barcodes.size()) {
-                            Log.d("BARCODE", "Là");
-                            for (int i = 0; i < barcodes.size(); i++) {
-                                toneGen.startTone(ToneGenerator.TONE_CDMA_PIP, 150);
-                                synchronized (this)
-                                {
-                                    try {
-                                        wait(750);
-                                    } catch (InterruptedException e) {
-                                        e.printStackTrace();
-                                    }
+                        for(int i = 0 ; i < barcodes.size(); i ++) {
+                            if (!m_barcodes.contains(barcodes.valueAt(i).rawValue)) {
+                                m_barcodes.add(barcodes.valueAt(i).rawValue);
+                                m_nbrCodes++;
+                                if (!multiple_detecting) {
+                                    multiple_detecting = true;
+                                    mdt = new MultipleDetectionTimer();
+                                    mdt.execute(multiple_detection_time * 1000);
+                                    parseJSON(barcodes.valueAt(0).rawValue);
+                                    currQuest = 0;
+                                    toneGen.startTone(ToneGenerator.TONE_CDMA_SOFT_ERROR_LITE, 150);
+                                    questionState = QUESTION_PRINTED_STATE;
+                                } else if (questionState != MULTIPLE_QUESTIONS_DETECTED) {
+                                    questionState = MULTIPLE_QUESTIONS_DETECTED;
+                                }
+                                if (multiple_detecting) {
+                                    toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 150);
                                 }
 
-                            }
-                            for (int i = 0; i < barcodes.size(); i++) {
-                                parseJSON(barcodes.valueAt(i).rawValue);
-                                while(ttobj.isSpeaking());
 
                             }
-                            lastBarcodesSize = barcodes.size();
                         }
-                    }
+                    lastBarcodesSize = barcodes.size();
                     //state = CODE_DETECTED_STATE;
                     //stopDetection();
                    /* for(int i = 0 ; i < barcodes.size(); i++)
@@ -372,7 +824,7 @@ public class MainActivity extends AppCompatActivity {
                                     }
                                     if(image)
                                     {
-                                        Intent intent = new Intent(getBaseContext(), ImageDialog.class);
+                                        Intent intent = new Intent(getApplicationContext(), ImageDialog.class);
                                         intent.putExtra("EXTRA_HTML", barcode.rawValue);
                                         startActivity(intent);
                                     }
@@ -398,9 +850,49 @@ public class MainActivity extends AppCompatActivity {
         detector.setProcessor(detector_processor);
     }
 
+
+    /**
+     * The AsyncTask used to detect when the Text To Speech engine talk for the first time
+     */
+    private class MultipleDetectionTimer extends AsyncTask<Integer,Void,Boolean>{
+
+        /**
+         * Get out of a while waiting for the text to speech to speak, and then initiate the application
+         * detector
+         * @param params The Text To Speech engine on 0
+         * @return An integer meaning it's ok
+         */
+        @Override
+        protected Boolean doInBackground(Integer... params) {
+                try {
+                    Thread.sleep(params[0]);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                if(questionState == MULTIPLE_QUESTIONS_DETECTED) {
+                    stopDetection();
+                }else if(questionState == QUESTION_PRINTED_STATE){
+                    m_barcodes.clear();
+                    m_nbrCodes = 0;
+                }
+            multiple_detecting = false;
+            return true;
+        }
+    }
+
+
+
     private void resetQuestion() {
         question = "";
+
         reponse = "";
+        text_space.setVisibility(View.INVISIBLE);
+        contentLayout.setVisibility(View.INVISIBLE);
+        questionState = NO_QUESTION_PRINTED_STATE;
+        m_barcodes.clear();
+        m_nbrCodes = 0;
+        currQuest = 0;
+        multiple_detecting = false;
 
     }
 
@@ -435,67 +927,83 @@ public class MainActivity extends AppCompatActivity {
         });*/
         mainLayout.setOnTouchListener(new OnSwipeTouchListener(MainActivity.this) {
             public void onSwipeTop() {
-                if(questionState == QUESTION_PRINTED_STATE)
-                {
-                    mpintro.seekTo(0);
-                    if(ttobj.isSpeaking()) ttobj.stop();
-                    mpintro.start();
+                if(questionState == QUESTION_PRINTED_STATE || questionState == MULTIPLE_QUESTIONS_DETECTED) {
+                    toSpeech(question, TextToSpeech.QUEUE_FLUSH);
 
                 }
             }
             public void onSwipeRight() {
-                if(questionState == REPONSE_PRINTED_STATE && question != "") {
+                /*if(questionState == REPONSE_PRINTED_STATE && question != "") {
                     printQuestion();
+                }*/
+                if(questionState == MULTIPLE_QUESTIONS_DETECTED && !multiple_detecting)
+                {
+                    if(currQuest > 0)
+                    {
+                        currQuest--;
+                        question = m_barcodes.get(currQuest);
+                        printQuestion();
+                        if(currQuest == 0)
+                        {
+                            toneGen.startTone(ToneGenerator.TONE_CDMA_HIGH_PBX_SLS, 25);
+                        }
+                    }
                 }
             }
             public void onSwipeLeft() {
-                if(questionState == QUESTION_PRINTED_STATE && reponse != "") {
+                Log.d("state",valueOf(questionState == QUESTION_PRINTED_STATE));
+                /*if(questionState == QUESTION_PRINTED_STATE && reponse != "") {
                     printReponse();
+                }*/
+                if(questionState == MULTIPLE_QUESTIONS_DETECTED)
+                {
+                    Log.d("ah","ah");
+                    if(multiple_detecting )
+                    {
+                        multiple_detecting = false;
+                        mdt.cancel(true);
+                        stopDetection();
+                    }
+                    if(currQuest+1 < m_nbrCodes)
+                    {
+                        currQuest++;
+                        question = m_barcodes.get(currQuest);
+                        if(currQuest+1 == m_nbrCodes) {
+                            toneGen.startTone(ToneGenerator.TONE_CDMA_HIGH_PBX_SLS, 25);
+                            try {
+                                Thread.sleep(100);
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                            toneGen.startTone(ToneGenerator.TONE_CDMA_HIGH_PBX_SLS, 25);
+                        }
+                        printQuestion();
+                    }
+                    else if(currQuest+1 == m_nbrCodes)
+                    {
+                        questionState = NO_QUESTION_PRINTED_STATE;
+                        m_barcodes.clear();
+                        m_nbrCodes = 0;
+                        currQuest = 0;
+                        startDetection();
+                    }
                 }
             }
             public void onSwipeBottom() {
-                if(ttobj.isSpeaking())
-                {
-                    ttobj.stop();
-                }
-                if(mpintro.isPlaying()){
-                    mpintro.pause();
-                    mpintro.seekTo(0);
-                }
+
+                    if(ttobj.isSpeaking())
+                    {
+                        ttobj.stop();
+                    }
+
             }
 
-            public void onLongClick(){
-                if(cameraState == START_STATE)
-                {
-                    startDetection();
-                }else if( cameraState == DETECTING_STATE){
-                    stopDetection();
-                }
-            }
 
-            @Override
-            public void onSingleTap() {
-
-                switch (questionState)
-                {
-                    case QUESTION_PRINTED_STATE:
-                        if(mpintro.isPlaying())
-                        {
-                            mpintro.pause();
-                            mpPosition = mpintro.getCurrentPosition();
-                            mpPaused = true;
-                        }else if(mpPaused == true){
-                            mpintro.seekTo(mpPosition);
-                            if(ttobj.isSpeaking()) ttobj.stop();
-                            mpintro.start();
-                            mpPaused = false;
-                        }
-                }
-            }
         });
 
     }
 
+    @TargetApi(Build.VERSION_CODES.M)
     private void checkPermissions() {
         if (marshmallow) {
             Log.d("PERMISSION_CHECK","---------Marshallow----------");
@@ -528,7 +1036,7 @@ public class MainActivity extends AppCompatActivity {
             }else{
                 camera = true;
             }
-            if (ContextCompat.checkSelfPermission(this,
+            /*if (ContextCompat.checkSelfPermission(this,
                     Manifest.permission.INTERNET)
                     != PackageManager.PERMISSION_GRANTED)
             {
@@ -554,7 +1062,34 @@ public class MainActivity extends AppCompatActivity {
                     // result of the request.
                 }
             }else
-                internet = true;
+                internet = true;*/
+            if (ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.VIBRATE)
+                    != PackageManager.PERMISSION_GRANTED) {
+                Log.d("PERMISSION_CHECK","---------CheckPermission----------");
+                // Should we show an explanation?
+                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                        Manifest.permission.VIBRATE)) {
+                    Log.d("PERMISSION_CHECK","---------Explanation----------");
+                    // Show an explanation to the user *asynchronously* -- don't block
+                    // this thread waiting for the user's response! After the user
+                    // sees the explanation, try again to request the permission.
+
+                } else {
+                    Log.d("PERMISSION_CHECK","---------NoExplanation----------");
+                    // No explanation needed, we can request the permission.
+
+                    ActivityCompat.requestPermissions(this,
+                            new String[]{Manifest.permission.CAMERA},
+                            CAMERA_REQUEST);
+
+                    // MY_PERMISSIONS_REQUEST_READ_CONTACTS is an
+                    // app-defined int constant. The callback method gets the
+                    // result of the request.
+                }
+            }else{
+                vibrate = true;
+            }
         }
     }
 
@@ -567,6 +1102,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public boolean onOptionsItemSelected(MenuItem item) {
         // Handle action bar item clicks here. The action bar will
         // automatically handle clicks on the Home/Up button, so long
@@ -576,9 +1112,13 @@ public class MainActivity extends AppCompatActivity {
         //noinspection SimplifiableIfStatement
         if (id == R.id.action_settings) {
             saveState();
-            Intent pickOptionIntent = new Intent(getBaseContext(), OptionActivity.class);
+            Intent pickOptionIntent = new Intent(getApplicationContext(), OptionActivity.class);
+            /*if(ice_cream && !lollipop) {
+                pickOptionIntent.putExtra("DefaultsEnforced", ttobj.areDefaultsEnforced());
+            }*/
+            pickOptionIntent.putExtra("languages",locals);
             startActivityForResult(pickOptionIntent, OPTION_REQUEST);
-            /*Intent intent = new Intent(getBaseContext(), OptionActivity.class);
+            /*Intent intent = new Intent(getApplicationContext(), OptionActivity.class);
             startActivity(intent);*/
             return true;
         }
@@ -596,20 +1136,22 @@ public class MainActivity extends AppCompatActivity {
                 // The Intent's data Uri identifies which contact was selected.
                 SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
 
+                float tmp = speechSpeed;
                 speechSpeed = settings.getFloat("speechSpeed", SPEEDSPEECH_DEFAULT);
 
-                ttslanguage = new Locale(settings.getString("language",LOCALE_DEFAULT.getLanguage()));
+                ttslanguage = new Locale(settings.getString("speechLanguage",LOCALE_DEFAULT.getLanguage()),settings.getString("speechCountry",LOCALE_DEFAULT.getCountry()));
                 int i = ttobj.setSpeechRate(speechSpeed);
-                Log.d("SETSR",valueOf(i));
-                if(ttobj.isLanguageAvailable(ttslanguage) == TextToSpeech.LANG_AVAILABLE){
-                    ttobj.setLanguage(ttslanguage);
-                }
+                ttobj.setLanguage(ttslanguage);
 
-                Log.d("language",ttslanguage.getDisplayCountry());
-                Log.d("speedSpeech",valueOf(speechSpeed));
+
+                speechMode = settings.getInt("speechMode",DEFAULT_MODE);
+
+                question_reset_time = settings.getInt("resetTime",DEFAULT_QUESTION_RESET_TIME);
+
+                multiple_detection_time = settings.getInt("MDTime",DEFAULT_MULTIPLE_DETECTION_TIME);
                 // Do something with the contact here (bigger example below)
             }
-        }
+        }/*
         if (requestCode == MY_DATA_CHECK_CODE) {
             if (resultCode == TextToSpeech.Engine.CHECK_VOICE_DATA_PASS) {
                 // success, create the TTS instance
@@ -621,7 +1163,7 @@ public class MainActivity extends AppCompatActivity {
                         TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA);
                 startActivity(installIntent);
             }
-        }
+        }*/
     }
 
     private void saveState() {
@@ -630,23 +1172,11 @@ public class MainActivity extends AppCompatActivity {
 
 
 
-    private void Wait(int i) {
-        final AppCompatActivity activity = this;
-        activity.runOnUiThread(new Runnable() {
-            public void run() {
-                try {
-                    wait(500);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-        });
-    }
-
     private void printQuestion() {
         final AppCompatActivity activity = this;
         activity.runOnUiThread(new Runnable() {
             public void run() {
+
                 text_space.setText(question);
                 /*if(image)
                 {
@@ -659,23 +1189,21 @@ public class MainActivity extends AppCompatActivity {
                 }*/
                 text_space.setVisibility(View.VISIBLE);
                 contentLayout.setVisibility(View.VISIBLE);
-                if(questionFile.exists()) {
-                    mpintro = MediaPlayer.create(activity, Uri.parse(Uri.encode(questionFile.getAbsolutePath())));
-                    if (mpintro != null) {
-                        mpintro.setLooping(false);
-                        if (ttobj.isSpeaking()) ttobj.stop();
-                        mpintro.start();
-                    } else {
-                        toSpeech("Un problème numéro 1 est survenu dans la lecture du code.", TextToSpeech.QUEUE_FLUSH);
-                    }
-                }else
+                toSpeech(question, speechMode);
+                if(!(questionState == MULTIPLE_QUESTIONS_DETECTED))
                 {
-                    toSpeech("Un problème numéro 2 est survenu dans la lecture du code.", TextToSpeech.QUEUE_ADD);
+                    questionState = QUESTION_PRINTED_STATE;
                 }
-                questionState = QUESTION_PRINTED_STATE;
+
+                if(question_reset_time > 0) {
+                    if (qdc != null)
+                        qdc.cancel(true);
+                    qdc = new QuestionDelayCounter();
+                    qdc.delegate = (QDCResponse) activity;
+                    qdc.execute(question_reset_time);
+                }
             }
         });
-
     }
 
     private void printReponse() {
@@ -698,7 +1226,11 @@ public class MainActivity extends AppCompatActivity {
         final AppCompatActivity activity = this;
         activity.runOnUiThread(new Runnable() {
             public void run() {
-                cameraView.setVisibility(View.INVISIBLE);
+                if(ttsready) {
+                    cameraView.setVisibility(View.INVISIBLE);
+                }else{
+                    cameraState = START_STATE;
+                }
             }
         });
     }
@@ -707,7 +1239,16 @@ public class MainActivity extends AppCompatActivity {
         final AppCompatActivity activity = this;
         activity.runOnUiThread(new Runnable() {
             public void run() {
-                cameraView.setVisibility(View.VISIBLE);
+
+                if(ttsprogress.getVisibility() == View.VISIBLE){
+                    ttsprogress.setVisibility(View.GONE);
+                    text_progress.setVisibility(View.GONE);
+                }
+                if(ttsready) {
+                    cameraView.setVisibility(View.VISIBLE);
+                }else{
+                    cameraState = DETECTING_STATE;
+                }
             }
         });
     }
@@ -779,7 +1320,7 @@ public class MainActivity extends AppCompatActivity {
 
             //image = false;
             musique = false;
-            toFile(question);
+            printQuestion();
         }
 
 
@@ -794,7 +1335,7 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(MainActivity.this, "Error code " + error.getErrorCode() + ": " +
                         error.getMessage(), Toast.LENGTH_LONG).show();
                 error.printStackTrace();
-                image_space.setImageResource(RES_ERROR);
+                //image_space.setImageResource(RES_ERROR);
             }
 
             @Override
@@ -807,7 +1348,7 @@ public class MainActivity extends AppCompatActivity {
                         /* save the image - I'm gonna use JPEG */
                 final Bitmap.CompressFormat mFormat = Bitmap.CompressFormat.JPEG;
                         /* don't forget to include the extension into the file name */
-                final File myImageFile = new File(getBaseContext().getFilesDir().getAbsolutePath() +
+                final File myImageFile = new File(getApplicationContext().getFilesDir().getAbsolutePath() +
                         File.separator + "images" + File.separator +  i_name + "." + mFormat.name().toLowerCase());
                 Log.d("FILE", myImageFile.getAbsolutePath());
                 BasicImageDownloader.writeToDisk(myImageFile, result, new BasicImageDownloader.OnBitmapSaveListener() {
@@ -858,8 +1399,9 @@ public class MainActivity extends AppCompatActivity {
                     // functionality that depends on this permission.
                     Toast.makeText(MainActivity.this, "Permission denied to use the camera", Toast.LENGTH_SHORT).show();
                 }
+                break;
             }
-            case INTERNET_REQUEST: {
+           /* case INTERNET_REQUEST: {
                 Log.d("PERMISSION_RESULT", "---------INTERNET_REQUEST----------");
 
                 // If request is cancelled, the result arrays are empty.
@@ -874,6 +1416,24 @@ public class MainActivity extends AppCompatActivity {
                     // permission denied, boo! Disable the
                     // functionality that depends on this permission.
                     Toast.makeText(MainActivity.this, "Permission denied to use internet", Toast.LENGTH_SHORT).show();
+                }
+                break;
+            }*/
+            case VIBRATE_REQUEST: {
+                Log.d("PERMISSION_RESULT", "---------INTERNET_REQUEST----------");
+
+                // If request is cancelled, the result arrays are empty.
+                if (grantResults.length > 0
+                        && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    Log.d("PERMISSION_RESULT", "---------GRANTED----------");
+                    vibrate = true;
+                    // permission was granted, yay! Do the
+                    // contacts-related task you need to do.
+                } else {
+                    Log.d("PERMISSION_RESULT", "---------DENIED----------");
+                    // permission denied, boo! Disable the
+                    // functionality that depends on this permission.
+                    Toast.makeText(MainActivity.this, "Permission denied to use vibrations", Toast.LENGTH_SHORT).show();
                 }
             }
 
@@ -892,6 +1452,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @SuppressWarnings("deprecation")
+    @TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1)
     private void toSpeech20(String str, int queue)
     {
         ttobj.speak(str, queue, null);
@@ -905,14 +1466,152 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void toSpeech(String str, int queue) {
+        if(((AudioManager)getSystemService(getApplicationContext().AUDIO_SERVICE)).getStreamVolume(AudioManager.STREAM_MUSIC) == 0){
+            vibrator.vibrate(1000);
+            Toast.makeText(getApplicationContext(),"Le volume est à 0.",Toast.LENGTH_SHORT).show();
+        }
         if (lollipop) {
             toSpeech21(str, queue);
-        } else {
+        } else{
             toSpeech20(str,queue);
         }
     }
 
-    private void toFile(String str){
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+
+        // Récupérer les valeurs du capteur
+        float x, y, z;
+        /*if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+            x = event.values[0];
+            y = event.values[1];
+            z = event.values[2];
+
+            long curTime = System.currentTimeMillis();
+
+            if ((curTime - lastUpdate) > 3000) {
+                long diffTime = (curTime - lastUpdate);
+                lastUpdate = curTime;
+
+                float speed = Math.abs(x + y + z - last_x - last_y - last_z) / diffTime * 10000;
+
+                if (speed > SHAKE_THRESHOLD) {
+
+                    Log.d("SHAKED","SHAKEDSHAKED");
+                }
+                Log.d("X",valueOf(x));
+                Log.d("Y",valueOf(y));
+                Log.d("Z",valueOf(z));
+                last_x = x;
+                last_y = y;
+                last_z = z;
+            }
+        }*/
+
+       /* if(hasAccelerometer && magnetic != null) {
+            if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+                acceleromterVector = event.values;
+            } else if (event.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
+                magneticVector = event.values;
+            }
+
+            // Demander au sensorManager la matric de Rotation (resultMatric)
+            long curTime = System.currentTimeMillis();
+
+            if ((curTime - lastUpdate) > 2000) {
+                long diffTime = (curTime - lastUpdate);
+
+                SensorManager.getRotationMatrix(resultMatrix, mResultMatric, acceleromterVector, magneticVector);
+
+                float[] values =  new float[3];
+                // Demander au SensorManager le vecteur d'orientation associé (values)
+                SensorManager.getOrientation(resultMatrix, values);
+
+                int inclination = (int) SensorManager.getInclination(mResultMatric);
+
+                Log.d("inclinationGarvity",valueOf(inclination));
+                if(lastInclination == -1){
+                    lastInclination = inclination;
+                }else{
+                    if(Math.abs(inclination - lastInclination) < 75){
+                        if (inclination < 40 && cameraState == START_STATE && ttsready && questionState != MULTIPLE_QUESTIONS_DETECTED) {
+                            startDetection();
+                            lastUpdate = curTime;
+                        } else if (inclination > 140 && cameraState == DETECTING_STATE && ttsready && questionState != MULTIPLE_QUESTIONS_DETECTED) {
+                            stopDetection();
+                            lastUpdate = curTime;
+                        }
+                    }
+                }
+
+
+            }
+        }else */if(hasAccelerometer)
+        {
+            long curTime = System.currentTimeMillis();
+            if ((curTime - lastUpdate) > 2000) {
+                if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+                    acceleromterVector = event.values.clone();
+
+                    double norm_Of_g = Math.sqrt(acceleromterVector[0] * acceleromterVector[0] + acceleromterVector[1] * acceleromterVector[1] + acceleromterVector[2] * acceleromterVector[2]);
+
+// Normalize the accelerometer vector
+                    acceleromterVector[0] = acceleromterVector[0] / (float)norm_Of_g;
+                    acceleromterVector[1] = acceleromterVector[1] / (float)norm_Of_g;
+                    acceleromterVector[2] = acceleromterVector[2] / (float)norm_Of_g;
+
+                    int inclination = (int) Math.round(Math.toDegrees(Math.acos(acceleromterVector[2])));
+                    if(lastInclination == -1){
+                        lastInclination = inclination;
+                    }else{
+                        if(Math.abs(inclination - lastInclination) < 75){
+                            if (inclination < 40 && cameraState == START_STATE && ttsready && questionState != MULTIPLE_QUESTIONS_DETECTED) {
+                                startDetection();
+                                toSpeech("Détection en cours.",TextToSpeech.QUEUE_ADD);
+                                lastUpdate = curTime;
+                            } else if (inclination > 140 && cameraState == DETECTING_STATE && ttsready && questionState != MULTIPLE_QUESTIONS_DETECTED) {
+                                stopDetection();
+                                toSpeech("Détection interrompue.",TextToSpeech.QUEUE_ADD);
+                                lastUpdate = curTime;
+                            }
+                        }
+                    }
+                    if(inclinationCounter == 7){
+                        lastInclination = inclination;
+                        inclinationCounter = 0;
+                    }else{
+                        inclinationCounter++;
+                    }
+
+                }
+            }
+        }else if(hasProximity) {
+            if (event.sensor.getType() == Sensor.TYPE_PROXIMITY) {
+                long curTime = System.currentTimeMillis();
+
+                lastUpdate = curTime;
+                // La valeur de la lumière
+                p = event.values[0];
+                if (p < 5 && cameraState == DETECTING_STATE) {
+                    stopDetection();
+
+                } else if (p >= 5 && cameraState == START_STATE) {
+                    startDetection();
+                }
+            }
+        }else{
+            if(cameraState == START_STATE && ttsready) {
+                startDetection();
+            }
+        }
+
+    }
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+
+    }
+
+  /*  private void toFile(String str){
         if(lollipop)
         {
             toFile21(str);
@@ -934,7 +1633,7 @@ public class MainActivity extends AppCompatActivity {
         utteranceBundle.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "synthetizeKey");
         ttobj.synthesizeToFile(str,utteranceBundle,questionFile,"synthetizeKey");
     }
-
+*/
 }
 
 

@@ -3,15 +3,25 @@ package angers.univ.ctalarmain.qrludo.activities;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.speech.tts.TextToSpeech;
 import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.Spinner;
+import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import com.google.android.gms.vision.text.Text;
+
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 
@@ -27,19 +37,40 @@ public class OptionActivity extends AppCompatActivity {
 
     SeekBar sb_speedSpeech;
     Spinner spin_language;
+    Switch sw_mode;
     TextView tv_SSValue;
+    EditText et_SRValue;
+    EditText et_MDTValue;
     Button b_valider;
     SharedPreferences settings;
     List<String> languages;
+    ArrayList<String> langs;
+    ArrayList<String> countries;
+    LinearLayout OptionLayout;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        languages = Arrays.asList(getResources().getStringArray(R.array.languages_array));
         setContentView(R.layout.activity_option);
+        OptionLayout = (LinearLayout)findViewById(R.id.option_layout);
+        OptionLayout.requestFocus();
+        langs = new ArrayList<>();
+        countries = new ArrayList<>();
+        languages = Arrays.asList(getResources().getStringArray(R.array.languages_array));
+
 
         sb_speedSpeech = (SeekBar) findViewById(R.id.sb_SpeedSpeech);
         tv_SSValue = (TextView) findViewById(R.id.tv_SSValue);
+        spin_language = (Spinner) findViewById(R.id.spin_languages);
+        sw_mode = (Switch) findViewById(R.id.switch_ajout);
+        et_SRValue  = (EditText) findViewById(R.id.et_SRValue);
+        et_MDTValue = (EditText) findViewById(R.id.et_MDTValue);
 
+        Intent intent = getIntent();
+        boolean enforced = intent.getBooleanExtra("DefaultsEnforced", true);
+        Bundle languages = intent.getBundleExtra("languages");
+
+        spin_language.setEnabled(enforced);
+        sb_speedSpeech.setEnabled(enforced);
 
         settings = getSharedPreferences(MainActivity.PREFS_NAME,0);
         float speedSpeech = settings.getFloat("speechSpeed",MainActivity.SPEEDSPEECH_DEFAULT);
@@ -64,47 +95,106 @@ public class OptionActivity extends AppCompatActivity {
             }
         });
 
-        String language = settings.getString("languageSpeech",MainActivity.LOCALE_DEFAULT.getLanguage());
+        String language = settings.getString("speechCountry",MainActivity.LOCALE_DEFAULT.getCountry());
 
-        String[] lang_list;
-        lang_list= getResources().getStringArray(R.array.languages_array);
-
-
-        spin_language = (Spinner) findViewById(R.id.spin_languages);
-
-        ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(this,
-                R.array.display_lang_array, android.R.layout.simple_spinner_item);
-// Specify the layout to use when the list of choices appears
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-// Apply the adapter to the spinner
-        spin_language.setAdapter(adapter);
         int index = 0;
-        for(int i = 0; i < languages.size(); i++)
+        final ArrayList<String> lang_list = new ArrayList<String>();
+
+        if(languages.containsKey("FR"))
         {
-            if(languages.get(i).equals(language))
-            {
-                index = i;
-            }
+            if(language.equals("FR"))
+                index = lang_list.size();
+            lang_list.add("Français");
+            langs.add("fr");
+            countries.add("FR");
         }
+        if(languages.containsKey("GB"))
+        {
+            if(language.equals("GB"))
+                index = lang_list.size();
+            lang_list.add("Anglais");
+            langs.add("en");
+            countries.add("GB");
+        }
+        if(languages.containsKey("DE"))
+        {
+            if(language.equals("DE"))
+                index = lang_list.size();
+            lang_list.add("Allemand");
+            langs.add("de");
+            countries.add("DE");
+        }
+        if(languages.containsKey("ES"))
+        {
+            if(language.equals("ES"))
+                index = lang_list.size();
+            lang_list.add("Espagnol");
+            langs.add("es");
+            countries.add("ES");
+        }
+        if(languages.containsKey("IT")){
+            if(language.equals("IT"))
+                index = lang_list.size();
+            lang_list.add("Italien");
+            langs.add("it");
+            countries.add("IT");
+        }
+        if(lang_list.isEmpty())
+        {
+            lang_list.add("Français");
+            langs.add(MainActivity.LOCALE_DEFAULT.getLanguage());
+            countries.add(MainActivity.LOCALE_DEFAULT.getCountry());
+        }
+
+
+        ArrayAdapter<String> spinnerArrayAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, lang_list);
+        spin_language.setAdapter(spinnerArrayAdapter);
         spin_language.setSelection(index);
+
+
+        int mode = settings.getInt("speechMode",MainActivity.DEFAULT_MODE);
+
+
+        if((mode == TextToSpeech.QUEUE_ADD && !sw_mode.isChecked()) || (mode == TextToSpeech.QUEUE_FLUSH && sw_mode.isChecked())){
+            sw_mode.toggle();
+        }
+
+
+        et_SRValue.setText(valueOf(settings.getInt("resetTime",MainActivity.DEFAULT_QUESTION_RESET_TIME)));
+
+        et_MDTValue.setText(valueOf(settings.getInt("MDTime",MainActivity.DEFAULT_MULTIPLE_DETECTION_TIME)));
 
         b_valider = (Button) findViewById(R.id.b_valider);
         b_valider.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                SharedPreferences.Editor edit = settings.edit();
-                edit.putFloat("speechSpeed",Float.parseFloat(tv_SSValue.getText().toString()));
+                if( Integer.parseInt(et_SRValue.getText().toString()) > Integer.parseInt(et_MDTValue.getText().toString())) {
+                    SharedPreferences.Editor edit = settings.edit();
+                    edit.putFloat("speechSpeed", Float.parseFloat(tv_SSValue.getText().toString()));
 
-                edit.putString("languageSpeech",languages.get(spin_language.getSelectedItemPosition()));
+                    edit.putString("speechCountry", countries.get(spin_language.getSelectedItemPosition()));
+                    Log.d("Country", countries.get(spin_language.getSelectedItemPosition()));
+                    edit.putString("speechLanguage", langs.get(spin_language.getSelectedItemPosition()));
+                    Log.d("Language", langs.get(spin_language.getSelectedItemPosition()));
+                    if (sw_mode.isChecked()) {
+                        edit.putInt("speechMode", TextToSpeech.QUEUE_ADD);
+                    } else {
+                        edit.putInt("speechMode", TextToSpeech.QUEUE_FLUSH);
+                    }
 
-                edit.apply();
-                Intent intent = new Intent();
-                if(getParent() == null){
-                    setResult(RESULT_OK,intent);
-                }else {
-                    getParent().setResult(RESULT_OK, intent);
+                    edit.putInt("resetTime", Integer.parseInt(et_SRValue.getText().toString()));
+                    edit.putInt("MDTime", Integer.parseInt(et_MDTValue.getText().toString()));
+                    edit.apply();
+                    Intent intent = new Intent();
+                    if (getParent() == null) {
+                        setResult(RESULT_OK, intent);
+                    } else {
+                        getParent().setResult(RESULT_OK, intent);
+                    }
+                    finish();
+                }else{
+                    Toast.makeText(OptionActivity.this, "Le délai de réinitialisation ne peut être supérieur au temps de détection multiple.", Toast.LENGTH_SHORT).show();
                 }
-                finish();
             }
         });
 

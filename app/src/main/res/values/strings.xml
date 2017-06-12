@@ -1,8 +1,10 @@
 <resources>
-    <string name="app_name">QRCodeForGames</string>
+    <string name="app_name">QRLudo</string>
     <string name="title_activity_web">WebActivity</string>
     <string name="card_picture">Card Picture</string>
     <string name="action_settings">Options</string>
+    <string name="loading">Chargement en cours...</string>
+    <string name="tts_speed_value">Vitesse de la synthèse vocale :</string>
     <string-array name="languages_array">
         <item>fr</item>
         <item>en</item>

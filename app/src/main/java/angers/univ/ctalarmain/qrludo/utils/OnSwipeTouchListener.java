@@ -1,5 +1,6 @@
 package angers.univ.ctalarmain.qrludo.utils;
 
+import android.util.Log;
 import android.view.View;
 
 import android.content.Context;
@@ -37,12 +38,6 @@ public class OnSwipeTouchListener implements OnTouchListener {
         }
 
         @Override
-        public boolean onSingleTapUp(MotionEvent e) {
-            onSingleTap();return true;
-        }
-
-
-        @Override
         public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
             boolean result = false;
             try {
@@ -73,8 +68,6 @@ public class OnSwipeTouchListener implements OnTouchListener {
         }
     }
 
-    public void onSingleTap() {
-    }
 
     public void onLongClick() {
     }
